@@ -110,6 +110,8 @@ try {
 
     cursor = lastBlock ? { timestamp: lastBlock.timestamp } : undefined;
   } while (cursor);
+
+  console.log("All tx indexes updated.");
 } finally {
   await prisma.$disconnect()
 }
