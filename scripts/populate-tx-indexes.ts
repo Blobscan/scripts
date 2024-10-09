@@ -1,8 +1,24 @@
-import { client } from "../clients/ethereum";
-import { prisma } from "../clients/prisma";
+import { PrismaClient } from "@prisma/client";
+import { createPublicClient, http } from "viem";
+import { mainnet } from "viem/chains";
+
+
+const prisma = new PrismaClient()
+const client = createPublicClient({
+  chain: mainnet,
+  transport: http(Bun.env.JSON_RPC_API_URL),
+});
 
 try {
   let cursor: { timestamp: Date } | undefined;
+
+  const txsWithoutIndexCount = await prisma.transaction.count({
+    where: {
+      index: null
+    }
+  })
+
+  let totalTxsUpdated = 0
 
   do {
     const totalT0 = performance.now();
@@ -45,6 +61,10 @@ try {
       },
     });
 
+    if (!dbBlockWithTxs.length) {
+      break
+    }
+
     const txPromises = [];
 
     for (const dbBlock of dbBlockWithTxs) {
@@ -54,19 +74,19 @@ try {
             blockNumber: BigInt(dbBlock.number),
           })
           .then((fullBlock) =>
-            dbBlock.transactions.map((tx) => {
+            dbBlock.transactions.map((dbTx) => {
               const index = fullBlock.transactions.findIndex(
-                (txHash) => txHash === tx.hash
+                (txHash) => txHash === dbTx.hash
               );
 
               if (index === -1) {
                 throw new Error(
-                  `Transaction ${tx.hash} not found in block ${dbBlock.number}`
+                  `DB Transaction ${dbTx.hash} not found in execution block ${fullBlock.number}`
                 );
               }
 
               return {
-                hash: tx.hash,
+                hash: dbTx.hash,
                 index,
               };
             })
@@ -96,17 +116,24 @@ try {
 
     const totalT1 = performance.now();
 
+    totalTxsUpdated += txsWithIndexes.length
+
+
+    const pct = (totalTxsUpdated / txsWithoutIndexCount) * 100
+
     console.log(
-      `${dbBlockWithTxs[0]?.number} - ${
+      `Blocks ${dbBlockWithTxs[0]?.number} - ${
         dbBlockWithTxs[dbBlockWithTxs.length - 1]?.number
-      }: Indexes updated for ${txsWithIndexes.length} txs in ${
+      } (${pct.toFixed(5)}% Total ${txsWithoutIndexCount}): Indexes updated for ${txsWithIndexes.length} txs in ${
         dbBlockWithTxs.length
-      } blocks. Total: ${totalT1 - totalT0}ms; Blocks fetching: ${
+      } blocks.
+Total time: ${totalT1 - totalT0}ms; Blocks fetching: ${
         blocksT1 - blocksT0
       }ms; Tx indexes update: ${updateT1 - updateT0}ms.`
     );
 
     const lastBlock = dbBlockWithTxs[dbBlockWithTxs.length - 1];
+
 
     cursor = lastBlock ? { timestamp: lastBlock.timestamp } : undefined;
   } while (cursor);
